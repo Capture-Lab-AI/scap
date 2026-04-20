@@ -140,6 +140,30 @@ impl Capturer {
         }
     }
 
+    /// Get the next captured frame, returning `Err(Timeout)` if no frame
+    /// arrives within `timeout`. Use this in long-running capture loops to
+    /// detect a stalled pipeline (e.g. ScreenCaptureKit silently failing to
+    /// deliver frames after sleep/wake on macOS) — `get_next_frame` blocks
+    /// forever in that scenario because it calls `rx.recv()` with no deadline.
+    pub fn get_next_frame_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Frame, mpsc::RecvTimeoutError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(mpsc::RecvTimeoutError::Timeout);
+            }
+            let res = self.rx.recv_timeout(remaining)?;
+            if let Some(frame) = self.engine.process_channel_item(res) {
+                return Ok(frame);
+            }
+            // process_channel_item returned None (intermediate state, not a
+            // full frame) — keep looping until the deadline expires.
+        }
+    }
+
     /// Get the dimensions the frames will be captured in
     pub fn get_output_frame_size(&mut self) -> [u32; 2] {
         self.engine.get_output_frame_size()
